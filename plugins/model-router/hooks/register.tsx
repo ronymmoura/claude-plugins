@@ -4,7 +4,6 @@ import type { EngineInterface, Register } from 'claude-code'
 import type { ModelRouterConfig, ModelRouterEffort } from '../types'
 
 const PANE = 'model-router'
-const TITLE = 'Models'
 const STORE_KEY = 'config'
 const INHERIT = 'inherit'
 
@@ -21,7 +20,27 @@ const LEGACY = [
   { id: 'claude-haiku-4-5', label: 'Haiku 4.5' },
 ]
 
+const HINTS: Record<string, string> = {
+  'claude-opus-5-5': 'Most capable',
+  'claude-sonnet-5-5': 'Balanced',
+  'claude-haiku-5-5': 'Fastest',
+  'claude-fable-5-1': 'Writing',
+}
+
 const EFFORTS: ModelRouterEffort[] = [INHERIT, 'low', 'medium', 'high', 'xhigh', 'max']
+
+const EFFORT_LABELS: Record<ModelRouterEffort, string> = {
+  inherit: 'Default',
+  low: 'Low',
+  medium: 'Medium',
+  high: 'High',
+  xhigh: 'XHigh',
+  max: 'Max',
+}
+
+// The mockup's accents: clay for the main agent, blue for its subagents.
+const MAIN_COLOR = '#D97757'
+const SUB_COLOR = '#93B3DD'
 
 const DEFAULTS: ModelRouterConfig = {
   mainModel: INHERIT,
@@ -37,7 +56,7 @@ const DEFAULTS: ModelRouterConfig = {
 const config = atom({ plugin: 'model-router', key: 'config' } as const, DEFAULTS)
 
 const labelOf = (id: string) => {
-  if (id === INHERIT) return 'session default'
+  if (id === INHERIT) return 'Session default'
 
   return [...MODELS, ...LEGACY].find(one => one.id === id)?.label ?? id
 }
@@ -75,6 +94,17 @@ const save = async (
   await $.store.set(STORE_KEY, next)
 }
 
+// Claude Code has no modal: a pane opened with focus, Escape to close and the
+// toasts held is its dialog. The desktop app still seats it as a side panel.
+const openPicker = ($: EngineInterface) =>
+  $.ui.open({
+    id: PANE,
+    title: 'Models',
+    focus: true,
+    closeOnEscape: true,
+    holdToasts: true,
+  })
+
 export const register: Register = (on, options) => {
   on('session.start', async ($, e, next) => {
     await $.command.register({
@@ -97,7 +127,7 @@ export const register: Register = (on, options) => {
   })
 
   on('command.run', { command: 'models' }, async $ => {
-    await $.ui.open({ id: PANE, title: TITLE })
+    await openPicker($)
 
     return { text: `Models: ${summaryOf(await read($, config))}` }
   })
@@ -116,38 +146,72 @@ export const register: Register = (on, options) => {
     })
   })
 
+  // The agents this module counts against the cap: `live` by agent id once
+  // started, `reserved` by tool_use_id while a spawn is on its way. Several
+  // Agent calls in one response spawn at once, so `$.agent.list()` alone lets
+  // them all through: each would read the list before the others are on it.
+  const live = new Set<string>()
+  const reserved = new Set<string>()
+
   // The subagent's model, and the cap on how many run at once.
   on('agent.spawn', async ($, e, next) => {
     const one = await read($, config)
 
-    if (e.fork) return next(e)
+    if (one.maxSubagents > 0 && e.resume === undefined) {
+      // Settle `live` against the engine's record: drop the ones that ended,
+      // take in any started before this module (re)loaded.
+      for (const agent of await $.agent.list()) {
+        const isRunning = agent.status === 'running' || agent.status === 'pending'
 
-    if (one.maxSubagents > 0) {
-      const running = (await $.agent.list()).filter(
-        agent => agent.status === 'running' || agent.status === 'pending',
-      ).length
+        if (isRunning) live.add(agent.id)
+        else live.delete(agent.id)
+      }
 
-      if (running >= one.maxSubagents) {
+      // From here to the reservation nothing awaits, so concurrent spawns
+      // check and reserve one at a time.
+      const inFlight = live.size + reserved.size
+
+      if (inFlight >= one.maxSubagents) {
         return {
-          deny: `model-router: at most ${one.maxSubagents} subagents at a time, and ${running} are running. Wait for one to finish before spawning another.`,
+          deny: `model-router: at most ${one.maxSubagents} subagents at a time, and ${inFlight} are running. Wait for one to finish before spawning another.`,
         }
       }
+
+      reserved.add(e.tool_use_id)
     }
 
-    if (!one.subEnabled || one.subModel === INHERIT) return next(e)
+    try {
+      const started = await next(
+        one.subEnabled && one.subModel !== INHERIT && !e.fork ? { ...e, model: one.subModel } : e,
+      )
 
-    return next({ ...e, model: one.subModel })
+      if ('agentId' in started && typeof started.agentId === 'string') live.add(started.agentId)
+
+      return started
+    } finally {
+      reserved.delete(e.tool_use_id)
+    }
   }).catch(($, e, next) => next(e))
+
+  // A subagent's turn ending frees its seat.
+  on('turn.complete', ($, e, next) => {
+    if (e.agentId !== undefined) live.delete(e.agentId)
+
+    return next(e)
+  })
 
   // Orchestrator mode rides on the prompt's own context blocks: what the model
   // reads beside the prompt and the user never sees. `prompt.compose` would be
   // the natural site, but a security plugin above this one sends that event on
   // past our hook. Only the main loop raises `prompt.submit`, so no subagent
-  // reads this.
+  // reads this. A background task's notification, a peer's message or a
+  // scheduled prompt is raised here too; only what the person sends carries it.
   on('prompt.submit', async ($, e, next) => {
     const one = await read($, config)
+    const isPersons =
+      e.origin.kind === 'composer' || e.origin.kind === 'bridge' || e.origin.kind === 'sdk'
 
-    if (!one.orchestrator) return next(e)
+    if (!one.orchestrator || !isPersons || e.isMeta) return next(e)
 
     return next({
       ...e,
@@ -155,48 +219,77 @@ export const register: Register = (on, options) => {
     })
   }).catch(($, e, next) => next(e))
 
+  // The band above the prompt: what is in force, and the button that opens
+  // the picker.
   on('ui.render', { component: 'AbovePrompt' }, async ($, e, next) => {
-    const one = await read($, config)
-
     if (e.props.hasSurvey) return next(e)
 
+    const beneath = await next(e)
+    const one = await read($, config)
     const { Box, Button, Text } = $.ui.resolve(e)
 
     return (
-      <Box>
-        <Text dimColor>{summaryOf(one)} </Text>
-        {one.orchestrator && <Text dimColor>· orchestrator </Text>}
-        <Button
-          key="open-models"
-          label="Models"
-          onPress={() => $.ui.open({ id: PANE, title: TITLE })}
-        />
+      <Box flexDirection="column" rowGap="sm">
+        {beneath}
+        <Box columnGap="sm" alignItems="center">
+          <Text color={MAIN_COLOR}>●</Text>
+          <Text weight="semibold">{labelOf(one.mainModel)}</Text>
+          {one.mainEffort !== INHERIT && <Text dimColor>{one.mainEffort}</Text>}
+          {one.subEnabled && <Text dimColor>›</Text>}
+          {one.subEnabled && <Text color={SUB_COLOR}>●</Text>}
+          {one.subEnabled && <Text weight="semibold">{labelOf(one.subModel)}</Text>}
+          {one.subEnabled && one.subEffort !== INHERIT && <Text dimColor>{one.subEffort}</Text>}
+          {one.orchestrator && <Text dimColor>· orchestrator</Text>}
+          <Button key="open-models" label="Models" onPress={() => openPicker($)} />
+        </Box>
       </Box>
     )
   })
 
+  // The picker, drawn in its dialog pane.
   on('ui.render', { component: 'Pane', requestId: PANE }, async ($, e) => {
-    const { Box, Button, Text } = $.ui.resolve(e)
     const one = await read($, config)
+    const { Box, Button, Text } = $.ui.resolve(e)
 
-    const mark = (isOn: boolean) => (isOn ? '●' : '○')
+    const caption = (text: string) => (
+      <Text size="caption" weight="semibold" dimColor>
+        {text}
+      </Text>
+    )
 
-    const modelRow = (
+    const switchOf = (key: string, isOn: boolean, flip: () => void) => (
+      <Button
+        key={key}
+        label={isOn ? 'On' : 'Off'}
+        variant={isOn ? 'primary' : 'secondary'}
+        onPress={flip}
+      />
+    )
+
+    const modelButtons = (
       prefix: string,
-      list: typeof MODELS,
       selected: string,
       pick: (id: string) => void,
+      hasHints: boolean,
     ) =>
-      list.map(model => (
+      [...MODELS, ...(one.showLegacy ? LEGACY : [])].map(model => (
         <Button
           key={`${prefix}-${model.id}`}
-          plain
-          label={`${mark(selected === model.id)} ${model.label}`}
+          label={model.label}
+          variant={selected === model.id ? 'primary' : 'secondary'}
           onPress={() => pick(model.id)}
-        />
+        >
+          {model.label}
+          {hasHints && HINTS[model.id] !== undefined && (
+            <Text size="caption" dimColor>
+              {' '}
+              {HINTS[model.id]}
+            </Text>
+          )}
+        </Button>
       ))
 
-    const effortRow = (
+    const effortButtons = (
       prefix: string,
       selected: ModelRouterEffort,
       pick: (level: ModelRouterEffort) => void,
@@ -204,100 +297,127 @@ export const register: Register = (on, options) => {
       EFFORTS.map(level => (
         <Button
           key={`${prefix}-${level}`}
-          plain
-          label={`${mark(selected === level)} ${level === INHERIT ? 'default' : level}`}
+          label={EFFORT_LABELS[level]}
+          variant={selected === level ? 'primary' : 'secondary'}
           onPress={() => pick(level)}
         />
       ))
 
     return (
-      <Box flexDirection="column">
-        <Text bold>Main agent</Text>
-        <Box flexDirection="column" marginBottom={1}>
-          <Button
-            key="main-inherit"
-            plain
-            label={`${mark(one.mainModel === INHERIT)} session default`}
-            onPress={() => save($, c => ({ ...c, mainModel: INHERIT }))}
-          />
-          {modelRow('main', MODELS, one.mainModel, id =>
-            save($, c => ({ ...c, mainModel: id })),
-          )}
-          {one.showLegacy &&
-            modelRow('main', LEGACY, one.mainModel, id =>
-              save($, c => ({ ...c, mainModel: id })),
+      <Box flexDirection="column" rowGap="md" padding="sm">
+        <Box flexDirection="column" rowGap="sm">
+          {caption('MAIN AGENT')}
+          <Box columnGap="sm" rowGap="sm" flexWrap="wrap">
+            <Button
+              key="main-inherit"
+              label="Default"
+              autoFocus
+              variant={one.mainModel === INHERIT ? 'primary' : 'secondary'}
+              onPress={() => save($, c => ({ ...c, mainModel: INHERIT }))}
+            />
+            {modelButtons('main', one.mainModel, id => save($, c => ({ ...c, mainModel: id })), true)}
+          </Box>
+          {caption('REASONING EFFORT')}
+          <Box columnGap="sm" rowGap="sm" flexWrap="wrap">
+            {effortButtons('me', one.mainEffort, level =>
+              save($, c => ({ ...c, mainEffort: level })),
             )}
+          </Box>
+        </Box>
+
+        <Box flexDirection="column" rowGap="sm">
+          {caption('SUBAGENTS')}
+          <Box justifyContent="space-between" alignItems="center" columnGap="md">
+            <Box flexDirection="column">
+              <Text weight="medium">Different model for subagents</Text>
+              <Text size="caption" dimColor>
+                {one.subEnabled
+                  ? 'Agents spawned by the main agent use this instead'
+                  : `Subagents inherit ${labelOf(one.mainModel)}`}
+              </Text>
+            </Box>
+            {switchOf('sub-toggle', one.subEnabled, () =>
+              save($, c => ({ ...c, subEnabled: !c.subEnabled })),
+            )}
+          </Box>
+          {one.subEnabled && (
+            <Box
+              flexDirection="column"
+              rowGap="sm"
+              padding="sm"
+              borderStyle="round"
+              borderColor={SUB_COLOR}
+            >
+              <Box columnGap="sm" rowGap="sm" flexWrap="wrap">
+                {modelButtons('sub', one.subModel, id => save($, c => ({ ...c, subModel: id })), false)}
+              </Box>
+              <Box columnGap="sm" rowGap="sm" flexWrap="wrap" alignItems="center">
+                <Text size="caption" dimColor>
+                  Effort
+                </Text>
+                {effortButtons('se', one.subEffort, level =>
+                  save($, c => ({ ...c, subEffort: level })),
+                )}
+              </Box>
+            </Box>
+          )}
+
+          <Box justifyContent="space-between" alignItems="center" columnGap="md">
+            <Box flexDirection="column">
+              <Text weight="medium">Max concurrent subagents</Text>
+              <Text size="caption" dimColor>
+                Spawns past the cap are refused
+              </Text>
+            </Box>
+            <Box columnGap="xs" alignItems="center">
+              <Button
+                key="cap-down"
+                label="−"
+                onPress={() =>
+                  save($, c => ({ ...c, maxSubagents: Math.max(0, c.maxSubagents - 1) }))
+                }
+              />
+              <Text weight="semibold" tabular>
+                {one.maxSubagents === 0 ? '∞' : String(one.maxSubagents)}
+              </Text>
+              <Button
+                key="cap-up"
+                label="+"
+                onPress={() =>
+                  save($, c => ({ ...c, maxSubagents: Math.min(20, c.maxSubagents + 1) }))
+                }
+              />
+            </Box>
+          </Box>
+
+          <Box justifyContent="space-between" alignItems="center" columnGap="md">
+            <Box flexDirection="column">
+              <Text weight="medium">Orchestrator mode</Text>
+              <Text size="caption" dimColor>
+                Main agent plans, delegates and reviews — it does not do the heavy work
+              </Text>
+            </Box>
+            {switchOf('orchestrator', one.orchestrator, () =>
+              save($, c => ({ ...c, orchestrator: !c.orchestrator })),
+            )}
+          </Box>
+        </Box>
+
+        <Box justifyContent="space-between" alignItems="center">
           <Button
             key="legacy"
             plain
-            label={`${one.showLegacy ? '▾' : '▸'} previous models`}
+            label={`${one.showLegacy ? '▾' : '▸'} Previous models`}
             onPress={() => save($, c => ({ ...c, showLegacy: !c.showLegacy }))}
           />
-        </Box>
-
-        <Text bold>Effort</Text>
-        <Box marginBottom={1}>
-          {effortRow('me', one.mainEffort, level =>
-            save($, c => ({ ...c, mainEffort: level })),
-          )}
-        </Box>
-
-        <Button
-          key="sub-toggle"
-          plain
-          label={`[${one.subEnabled ? 'x' : ' '}] different model for subagents`}
-          onPress={() => save($, c => ({ ...c, subEnabled: !c.subEnabled }))}
-        />
-        {one.subEnabled && (
-          <Box flexDirection="column" marginBottom={1}>
-            {modelRow('sub', MODELS, one.subModel, id =>
-              save($, c => ({ ...c, subModel: id })),
-            )}
-            {one.showLegacy &&
-              modelRow('sub', LEGACY, one.subModel, id =>
-                save($, c => ({ ...c, subModel: id })),
-              )}
-            <Box>
-              <Text dimColor>effort </Text>
-              {effortRow('se', one.subEffort, level =>
-                save($, c => ({ ...c, subEffort: level })),
-              )}
-            </Box>
-          </Box>
-        )}
-        {!one.subEnabled && (
-          <Text dimColor>Subagents inherit {labelOf(one.mainModel)}.</Text>
-        )}
-
-        <Box marginTop={1}>
-          <Text>Max subagents </Text>
           <Button
-            key="cap-down"
-            label="-"
-            onPress={() =>
-              save($, c => ({ ...c, maxSubagents: Math.max(0, c.maxSubagents - 1) }))
-            }
-          />
-          <Text bold>
-            {' '}
-            {one.maxSubagents === 0 ? 'no cap' : String(one.maxSubagents)}{' '}
-          </Text>
-          <Button
-            key="cap-up"
-            label="+"
-            onPress={() =>
-              save($, c => ({ ...c, maxSubagents: Math.min(20, c.maxSubagents + 1) }))
-            }
+            key="done"
+            label="Done"
+            variant="primary"
+            role="dismiss"
+            onPress={() => $.ui.close({ id: PANE })}
           />
         </Box>
-
-        <Button
-          key="orchestrator"
-          plain
-          label={`[${one.orchestrator ? 'x' : ' '}] orchestrator mode`}
-          onPress={() => save($, c => ({ ...c, orchestrator: !c.orchestrator }))}
-        />
-        <Text dimColor>Main agent plans, delegates and reviews.</Text>
       </Box>
     )
   })

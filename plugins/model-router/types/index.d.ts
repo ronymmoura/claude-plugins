@@ -12,7 +12,7 @@ export type ModelRouterConfig = {
   maxSubagents: number
   /** Whether the main agent is told to plan, delegate and review rather than do the work. */
   orchestrator: boolean
-  /** Whether the pane lists the previous model generations. */
+  /** Whether the picker lists the previous model generations. */
   showLegacy: boolean
 }
 

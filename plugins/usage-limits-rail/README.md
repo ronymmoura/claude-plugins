@@ -1,36 +1,30 @@
 # usage-limits-rail
 
-A pane beside the chat with the account's rate-limit windows: how much of each is used, and when it resets.
+The account's rate-limit windows in one compact line above the prompt: how much of each is used, and how long until it resets.
 
 ```
-5-hour window 68%
-████████████████░░░░░░░
-resets in 1h 12m · 26/10/2026, 14:30
-
-Weekly 41%
-█████████░░░░░░░░░░░░░░
-resets in 6d 4h · 02/11/2026, 09:00
-
-Updated just now
+5h ███████░░░ 68% ↻ 1h 12m   week ████░░░░░░ 41% ↻ 6d 4h
 ```
+
+Each bar is green, then amber from `warnPercent`, then red at 100%.
+
+## Command
+
+`/usage-limits` prints the detail: each window's name, the percentage used, the time left and the reset's local date and time.
 
 ## How it works
 
 - `$.session.usage()` on start and every 30 seconds, and the `session.measure` event whenever a window moves, feed `$.state`.
-- The pane is a `ui.render` hook on `{ component: 'Pane', requestId: 'usage-limits' }`.
-- Windows are drawn as the engine reports them (`five_hour`, `seven_day`, a gateway's `spend_limit`, …); a kind with no friendly name is drawn by its own.
+- The line is a `ui.render` hook on `AbovePrompt`. It draws whatever the band beneath it holds first, so another plugin's band (model-router's, say) stays.
+- Windows are drawn as the engine reports them (`five_hour`, `seven_day`, a gateway's `spend_limit`, …); a kind with no short name is drawn by its own.
 
 ## Options
 
 | Option | Default | What it does |
 | --- | --- | --- |
-| `warnPercent` | `85` | Percentage from which a window is drawn as a warning (amber, then red at 100). |
-| `openOnStart` | `true` | Open the pane when the session starts. |
-
-## Command
-
-`/usage-limits` re-reads the figures and opens the pane.
+| `warnPercent` | `85` | Percentage from which a window is drawn as a warning. |
 
 ## Limits
 
-The list is empty off a subscription and until the first model response of the session reports a window — the engine has nothing to report before then.
+- Claude Code gives plugins no site in the desktop app's session rail, beside the context panel. The band above the prompt is the nearest place that is always on screen.
+- The line is empty off a subscription and until the first model response of the session reports a window: the engine has nothing to report before then.

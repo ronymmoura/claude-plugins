@@ -2,36 +2,19 @@
 
 Pick the model and the reasoning effort for the main agent and, separately, for the subagents it spawns. Cap how many subagents run at once, and put the main agent in orchestrator mode.
 
-A band above the prompt shows what is in force and opens the pane:
+A band above the prompt shows what is in force:
 
 ```
-Opus 5.5 · high › Sonnet 5.5 · medium · orchestrator  [ Models ]
+● Opus 5.5 high › ● Sonnet 5.5 medium · orchestrator  [ Models ]
 ```
 
-## The pane
+**Models**, or `/models`, opens the picker as a dialog pane: it takes the keyboard (Tab and the arrows walk its buttons), Escape or **Done** closes it, and notifications wait until it closes. It holds:
 
-`/models`, or the **Models** button in the band.
-
-```
-Main agent
-○ session default
-● Opus 5.5
-○ Sonnet 5.5
-○ Haiku 5.5
-○ Fable 5.1
-▸ previous models
-
-Effort
-○ default  ○ low  ○ medium  ● high  ○ xhigh  ○ max
-
-[x] different model for subagents
-  ○ Opus 5.5  ● Sonnet 5.5  ○ Haiku 5.5  ○ Fable 5.1
-  effort ○ default ○ low ● medium ○ high ○ xhigh ○ max
-
-Max subagents  [-] 3 [+]
-
-[x] orchestrator mode
-```
+- **Main agent** — Default (the session's own model), Opus 5.5, Sonnet 5.5, Haiku 5.5, Fable 5.1, and the previous models when expanded.
+- **Reasoning effort** — Default, Low, Medium, High, XHigh, Max.
+- **Subagents** — an On/Off switch for a model of their own; when on, their model and effort in a box beside it.
+- **Max concurrent subagents** — a − / + stepper; ∞ for no cap.
+- **Orchestrator mode** — an On/Off switch.
 
 Every choice is written to `$.store`, so it comes back in the next session.
 
@@ -43,7 +26,8 @@ Every choice is written to `$.store`, so it comes back in the next session.
 | The subagent's model at spawn time | `agent.spawn`, rewriting `model`. |
 | The cap | `agent.spawn`, denying a spawn while `$.agent.list()` already shows that many running or pending agents. The model reads the refusal and waits. |
 | Orchestrator mode | `prompt.submit`, adding the instructions to the prompt's `context`: blocks the model reads beside the prompt and the user never sees. |
-| The band and the pane | `ui.render` on `AbovePrompt` and on `{ component: 'Pane' }`. |
+| The band | `ui.render` on `AbovePrompt`, drawing whatever the band beneath it holds first, so another plugin's band stays. |
+| The picker | `ui.render` on `{ component: 'Pane' }`, opened with `focus`, `closeOnEscape` and `holdToasts`. |
 
 `session default` leaves the engine's own choice alone — nothing is rewritten. A fork (`subagent_type: "fork"`) always inherits the parent's model, so the cap applies to it but the model does not.
 
@@ -57,7 +41,7 @@ The cost of that choice: the block is attached to every prompt while the mode is
 
 ## Options
 
-These seed a new session; the pane overrides them and persists.
+These seed a new session; the picker overrides them and persists.
 
 | Option | Default |
 | --- | --- |
@@ -68,6 +52,6 @@ These seed a new session; the pane overrides them and persists.
 
 ## Limits
 
-- Claude Code has no hookable component for the composer's own model button, so this replaces it with a band above the prompt rather than changing that button.
+- Claude Code has no hookable component for the composer's own model button, no floating popover (a Box drawn `position: "absolute"` is clipped to its own band) and no modal. A pane opened as a dialog is the nearest thing: it behaves as one, but the desktop app seats it as a side panel.
 - Picking a model here does not move the session's `/model` setting; it rewrites each request as it is sent. `/model` still shows the session's own choice.
 - The model ids under **previous models** are the ones this build names; a model your account cannot reach fails the request, and the engine says so.

@@ -20,7 +20,7 @@ Answer `y` to add the marketplace, then pick a scope. From a shell, `claude plug
 
 | Plugin | What it does |
 | --- | --- |
-| [usage-limits-rail](plugins/usage-limits-rail) | A pane beside the chat with the account's rate-limit windows: how much of each is used and when it resets. |
+| [usage-limits-rail](plugins/usage-limits-rail) | The account's rate-limit windows in a compact line above the prompt: how much of each is used and when it resets. |
 | [model-router](plugins/model-router) | Model and effort for the main agent and, separately, for its subagents; a cap on how many run at once; orchestrator mode. |
 
 ## Developing
