@@ -1,0 +1,33 @@
+{
+  "name": "model-router",
+  "version": "0.1.0",
+  "description": "Pick the model and effort for the main agent and, separately, for its subagents; cap how many run at once and put the main agent in orchestrator mode.",
+  "author": { "name": "Rony Moura" },
+  "types": "./types/index.d.ts",
+  "userConfig": {
+    "subModel": {
+      "type": "string",
+      "title": "Subagent model",
+      "description": "The model subagents run on when a model of their own is enabled.",
+      "default": "claude-sonnet-5-5"
+    },
+    "subEnabled": {
+      "type": "boolean",
+      "title": "Subagent model on",
+      "description": "Start sessions with a separate subagent model enabled.",
+      "default": false
+    },
+    "maxSubagents": {
+      "type": "number",
+      "title": "Max subagents",
+      "description": "How many subagents may run at once; 0 for no cap.",
+      "default": 3
+    },
+    "orchestrator": {
+      "type": "boolean",
+      "title": "Orchestrator mode",
+      "description": "Tell the main agent to plan, delegate and review instead of doing the heavy work.",
+      "default": false
+    }
+  }
+}

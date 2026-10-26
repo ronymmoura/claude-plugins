@@ -1,0 +1,9 @@
+{
+  "name": "ronymmoura",
+  "owner": { "name": "Rony Moura" },
+  "description": "Claude Code plugins by Rony Moura: usage limits in the session rail, and model routing for the main agent and its subagents.",
+  "plugins": [
+    { "name": "usage-limits-rail", "source": "./plugins/usage-limits-rail" },
+    { "name": "model-router", "source": "./plugins/model-router" }
+  ]
+}

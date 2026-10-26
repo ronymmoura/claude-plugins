@@ -1,0 +1,21 @@
+{
+  "name": "usage-limits-rail",
+  "version": "0.1.0",
+  "description": "A pane beside the chat with the account's rate-limit windows: how much of each is used and when it resets.",
+  "author": { "name": "Rony Moura" },
+  "types": "./types/index.d.ts",
+  "userConfig": {
+    "warnPercent": {
+      "type": "number",
+      "title": "Warn from",
+      "description": "Percentage from which a window is drawn as a warning.",
+      "default": 85
+    },
+    "openOnStart": {
+      "type": "boolean",
+      "title": "Open on start",
+      "description": "Open the pane when the session starts.",
+      "default": true
+    }
+  }
+}
