@@ -2,19 +2,21 @@
 
 Pick the model and the reasoning effort for the main agent and, separately, for the subagents it spawns. Cap how many subagents run at once, and put the main agent in orchestrator mode.
 
-A band above the prompt shows what is in force:
+A band above the prompt shows what is in force, as one rounded chip:
 
 ```
-● Opus 5.5 high › ● Sonnet 5.5 medium · orchestrator  [ Models ]
+● Opus 5.5 med → ● Sonnet 5.5 high ×3  ORQ  [ Models ]
 ```
 
-**Models**, or `/models`, opens the picker as a dialog pane: it takes the keyboard (Tab and the arrows walk its buttons), Escape or **Done** closes it, and notifications wait until it closes. It holds:
+The clay dot is the main agent, the blue one its subagents (`×3` is the cap, `×∞` for none); `ORQ` appears while orchestrator mode is on. The terminal draws the same on one plain row.
 
-- **Main agent** — Default (the session's own model), Opus 5.5, Sonnet 5.5, Haiku 5.5, Fable 5.1, and the previous models when expanded.
-- **Reasoning effort** — Default, Low, Medium, High, XHigh, Max.
-- **Subagents** — an On/Off switch for a model of their own; when on, their model and effort in a box beside it.
-- **Max concurrent subagents** — a − / + stepper; ∞ for no cap.
-- **Orchestrator mode** — an On/Off switch.
+**Models**, or `/models`, opens the picker as a dialog pane: it takes the keyboard (Tab and the arrows walk its buttons), Escape or **Done** closes it, and notifications wait until it closes. It holds two cards and a row:
+
+- **Main agent** (clay) — a 2-column grid of model tiles (Opus 5.5, Sonnet 5.5, Haiku 5.5, Fable 5.1, and the previous models when expanded) with **Session default** beside the heading (a press anywhere on a tile picks it), and the reasoning effort as a slider you can press on any stop or drag: auto, low, med, high, xhigh, max.
+- **Subagents** (blue) — a switch for a model of their own; when on, the same model tiles in blue and an effort slider; when off, a line saying they inherit the main model. A **Concurrent** stepper (− / ＋, ∞ for no cap) is always there, since the cap applies either way.
+- **Orchestrator** — a switch for orchestrator mode.
+
+The tiles, sliders and switches are driven by surface modules (`hooks/tiles.tsx`, `hooks/slider.tsx`, `hooks/switch.tsx`) drawn with a `Client`. On the desktop each switch is a 44×24 pill drawn as an `Svg`, animated with SMIL over about 160 ms, with a transparent `Client` laid over it that takes the press; on the terminal the switch module draws the pill with cells. The slider is the `Client`'s own drawing on every surface, at rest and while dragged, since the desktop holds the pane's redraws during a press; it saves on release. Where there is no `Client` (vscode, mobile) the pane draws plain buttons instead. `hooks/picker.test.tsx` runs with `claude plugin test`.
 
 Every choice is written to `$.store`, so it comes back in the next session.
 

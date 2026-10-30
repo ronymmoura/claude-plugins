@@ -1,6 +1,6 @@
 {
   "name": "model-router",
-  "version": "0.3.0",
+  "version": "0.4.0",
   "description": "Pick the model and effort for the main agent and, separately, for its subagents; cap how many run at once and put the main agent in orchestrator mode.",
   "author": { "name": "Rony Moura" },
   "types": "./types/index.d.ts",

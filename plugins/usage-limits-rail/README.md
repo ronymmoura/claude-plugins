@@ -1,12 +1,16 @@
 # usage-limits-rail
 
-The account's rate-limit windows in one compact line above the prompt: how much of each is used, and how long until it resets.
+The account's rate-limit windows in one compact row above the prompt: how much of each is used, how long until it resets, and whether you are ahead of the pace.
 
 ```
-5h ███████░░░ 68% ↻ 1h 12m   week ████░░░░░░ 41% ↻ 6d 4h
+5h                37%     week              65%
+[=====|-----------]       [=========|------]
+↻ 3h 54m · 18:00          ahead of pace · Tue 04:00
 ```
 
-Each bar is green, then amber from `warnPercent`, then red at 100%.
+On desktop each window is a 150px column: its short name (`5h`, `week`, `week·opus`, `spend`) and the percentage on one line, a progress bar, and a caption. The bar carries a pace tick at the share of the window that has already elapsed (5 hours for `five_hour`, 7 days for `seven_day` and `seven_day_opus`; other kinds have no tick). The caption is `↻ <time left> · <reset time>`, switches to `ahead of pace · <reset time>` when usage is more than 5 points past the tick, and reads `Limit reached · resets in <time left>` at 100%.
+
+The colour follows the level, not the window: blue up to `warnPercent`, amber above it, red above `dangerPercent`. The terminal draws glyph bars with the same levels and caption.
 
 ## Command
 
@@ -22,7 +26,8 @@ Each bar is green, then amber from `warnPercent`, then red at 100%.
 
 | Option | Default | What it does |
 | --- | --- | --- |
-| `warnPercent` | `85` | Percentage from which a window is drawn as a warning. |
+| `warnPercent` | `75` | Percentage above which a window is drawn in amber. |
+| `dangerPercent` | `90` | Percentage above which a window is drawn in red. |
 
 ## Limits
 

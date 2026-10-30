@@ -32,49 +32,69 @@ const nameOf = (kind: string) =>
 
 const shortNameOf = (kind: string) => SHORT_NAMES[kind] ?? kind.replace(/_/g, ' ')
 
-const colorOf = (percent: number, warnAt: number) =>
-  percent >= 100 ? 'red' : percent >= warnAt ? 'yellow' : 'green'
+const LEVELS = {
+  ok: { hex: '#93B3DD', named: 'blue' },
+  warn: { hex: '#E0B45C', named: 'yellow' },
+  danger: { hex: '#E5484D', named: 'red' },
+} as const
 
-// The mockup's palette: each window keeps its own accent until it nears the
-// limit (amber) or reaches it (red).
-const ACCENTS: Record<string, string> = {
-  five_hour: '#D97757',
-  seven_day: '#93B3DD',
-  seven_day_opus: '#E0B45C',
-}
-const NEAR = '#E0B45C'
-const REACHED = '#E08062'
 const TRACK = '#3C3A36'
-const METER_WIDTH = 220
-const METER_HEIGHT = 8
+const PACE = '#ECEAE3'
+const METER_WIDTH = 150
+const METER_HEIGHT = 10
+const TRACK_HEIGHT = 6
+const PACE_WIDTH = 2
 
-const accentOf = (window: UsageWindow, warnAt: number) => {
-  if (window.percentUsed >= 100) return REACHED
-  if (window.percentUsed >= warnAt) return NEAR
-
-  return ACCENTS[window.kind] ?? '#93B3DD'
+const DURATIONS: Record<string, number> = {
+  five_hour: 5 * 60 * 60_000,
+  seven_day: 7 * 24 * 60 * 60_000,
+  seven_day_opus: 7 * 24 * 60 * 60_000,
 }
 
-const meterOf = (percent: number, color: string) => {
+const AHEAD_MARGIN = 0.05
+
+const levelOf = (percent: number, warnAt: number, dangerAt: number) =>
+  percent > dangerAt ? LEVELS.danger : percent > warnAt ? LEVELS.warn : LEVELS.ok
+
+// The fraction of the window's duration already elapsed, or undefined when
+// the kind has no known duration or the reset time is missing.
+const elapsedOf = (window: UsageWindow, now: number) => {
+  const duration = DURATIONS[window.kind]
+
+  if (duration === undefined || window.resetsAt === undefined) return undefined
+
+  const at = Date.parse(window.resetsAt)
+
+  if (Number.isNaN(at)) return undefined
+
+  return Math.max(0, Math.min(1, 1 - (at - now) / duration))
+}
+
+const meterOf = (percent: number, color: string, elapsed: number | undefined) => {
   const fill = Math.max(0, Math.min(METER_WIDTH, (percent / 100) * METER_WIDTH))
-  const radius = METER_HEIGHT / 2
+  const top = (METER_HEIGHT - TRACK_HEIGHT) / 2
+  const radius = TRACK_HEIGHT / 2
+  const pace =
+    elapsed === undefined
+      ? ''
+      : `<rect x="${Math.min(METER_WIDTH - PACE_WIDTH, elapsed * METER_WIDTH).toFixed(1)}" y="0" width="${PACE_WIDTH}" height="${METER_HEIGHT}" fill="${PACE}"/>`
 
-  return `<svg xmlns="http://www.w3.org/2000/svg" width="${METER_WIDTH}" height="${METER_HEIGHT}" viewBox="0 0 ${METER_WIDTH} ${METER_HEIGHT}"><rect width="${METER_WIDTH}" height="${METER_HEIGHT}" rx="${radius}" fill="${TRACK}"/>${fill > 0 ? `<rect width="${Math.max(fill, METER_HEIGHT)}" height="${METER_HEIGHT}" rx="${radius}" fill="${color}"/>` : ''}</svg>`
+  return `<svg xmlns="http://www.w3.org/2000/svg" width="${METER_WIDTH}" height="${METER_HEIGHT}" viewBox="0 0 ${METER_WIDTH} ${METER_HEIGHT}"><rect y="${top}" width="${METER_WIDTH}" height="${TRACK_HEIGHT}" rx="${radius}" fill="${TRACK}"/>${fill > 0 ? `<rect y="${top}" width="${Math.max(fill, TRACK_HEIGHT).toFixed(1)}" height="${TRACK_HEIGHT}" rx="${radius}" fill="${color}"/>` : ''}${pace}</svg>`
 }
 
-// ` · 20:10` for a reset within a day, ` · Wed 10:00` past that.
+// `20:10` for a reset within a day, `Wed 10:00` past that.
 const shortClockOf = (window: UsageWindow, now: number) => {
-  if (window.resetsAt === undefined) return ''
+  if (window.resetsAt === undefined) return undefined
 
   try {
     const at = new Date(window.resetsAt)
     const time = at.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })
 
-    if (at.getTime() - now < 24 * 60 * 60_000) return ` · ${time}`
+    if (at.getTime() - now < 24 * 60 * 60_000) return time
 
-    return ` · ${at.toLocaleDateString([], { weekday: 'short' })} ${time}`
+    return `${at.toLocaleDateString([], { weekday: 'short' })} ${time}`
   } catch {
-    return ''
+    return undefined
   }
 }
 
@@ -111,6 +131,25 @@ const leftOf = (window: UsageWindow, now: number) => {
   return `${minutes}m`
 }
 
+// `↻ 3h 54m · 18:00`; `ahead of pace · 18:00` when usage outruns the elapsed
+// share of the window; `Limit reached · resets in 3h 54m` at 100%.
+const captionOf = (window: UsageWindow, now: number) => {
+  const left = leftOf(window, now)
+  const clock = shortClockOf(window, now)
+
+  if (window.percentUsed >= 100) {
+    return left === undefined ? 'Limit reached' : `Limit reached · resets in ${left}`
+  }
+
+  if (left === undefined) return 'Reset time unknown'
+
+  const elapsed = elapsedOf(window, now)
+  const ahead = elapsed !== undefined && window.percentUsed / 100 > elapsed + AHEAD_MARGIN
+  const lead = ahead ? 'ahead of pace' : `↻ ${left}`
+
+  return clock === undefined ? lead : `${lead} · ${clock}`
+}
+
 const clockOf = (window: UsageWindow) => {
   if (window.resetsAt === undefined) return ''
 
@@ -145,7 +184,8 @@ const refresh = async ($: EngineInterface) => {
 }
 
 export const register: Register = (on, options) => {
-  const warnAt = Number(options?.warnPercent ?? 85)
+  const warnAt = Number(options?.warnPercent ?? 75)
+  const dangerAt = Number(options?.dangerPercent ?? 90)
 
   on('session.start', async ($, e, next) => {
     await $.command.register({
@@ -208,18 +248,16 @@ export const register: Register = (on, options) => {
           {beneath}
           <Box columnGap={3} flexWrap="wrap">
             {list.map(one => {
-              const left = leftOf(one, now)
+              const color = levelOf(one.percentUsed, warnAt, dangerAt).named
 
               return (
                 <Box columnGap={1}>
                   <Text dimColor>{shortNameOf(one.kind)}</Text>
-                  <Text color={colorOf(one.percentUsed, warnAt)}>
-                    {barOf(one.percentUsed, BAR_WIDTH)}
-                  </Text>
-                  <Text color={colorOf(one.percentUsed, warnAt)} bold>
+                  <Text color={color}>{barOf(one.percentUsed, BAR_WIDTH)}</Text>
+                  <Text color={color} bold>
                     {one.percentUsed}%
                   </Text>
-                  {left !== undefined && <Text dimColor>↻ {left}</Text>}
+                  <Text dimColor>{captionOf(one, now)}</Text>
                 </Box>
               )
             })}
@@ -230,47 +268,39 @@ export const register: Register = (on, options) => {
 
     const { Box, Svg, Text } = $.ui.resolve(e)
 
+    // One wrapping row: the windows first, then whatever the other mods drew
+    // beneath (the model chip), so they share a line.
     return (
-      <Box flexDirection="column" rowGap="sm">
-        {beneath}
-        <Box columnGap="xl" rowGap="sm" flexWrap="wrap">
-          {list.map(one => {
-            const color = accentOf(one, warnAt)
-            const left = leftOf(one, now)
-            const isNear = one.percentUsed >= warnAt
+      <Box flexWrap="wrap" columnGap="xl" rowGap="sm" alignItems="center">
+        {list.map(one => {
+          const color = levelOf(one.percentUsed, warnAt, dangerAt).hex
+          const elapsed = elapsedOf(one, now)
 
-            return (
-              <Box flexDirection="column" rowGap="xs">
-                <Box justifyContent="space-between" columnGap="md">
-                  <Text size="footnote">{nameOf(one.kind)}</Text>
-                  <Text size="footnote" weight="semibold" color={color} tabular>
-                    {one.percentUsed}%
-                  </Text>
-                </Box>
-                <Svg
-                  source={meterOf(one.percentUsed, color)}
-                  alt={`${nameOf(one.kind)}: ${one.percentUsed}% used`}
-                  width={METER_WIDTH}
-                  height={METER_HEIGHT}
-                />
-                {isNear && (
-                  <Text size="caption" color={color}>
-                    {one.percentUsed >= 100
-                      ? `Limit reached${left === undefined ? '' : ` — resets in ${left}`}`
-                      : `Nearing the limit${left === undefined ? '' : ` — resets in ${left}`}`}
-                  </Text>
-                )}
-                {!isNear && (
-                  <Text size="caption" dimColor>
-                    {left === undefined
-                      ? 'Reset time unknown'
-                      : `Resets in ${left}${shortClockOf(one, now)}`}
-                  </Text>
-                )}
+          // No Box width: its numbers are cells, not pixels, so the column
+          // sizes to the Svg (CSS pixels) and the header follows the bar.
+          return (
+            <Box flexDirection="column" rowGap="xs">
+              <Box columnGap="md">
+                <Text size="footnote" dimColor>
+                  {shortNameOf(one.kind)}
+                </Text>
+                <Text size="footnote" weight="semibold" color={color} tabular>
+                  {one.percentUsed}%
+                </Text>
               </Box>
-            )
-          })}
-        </Box>
+              <Svg
+                source={meterOf(one.percentUsed, color, elapsed)}
+                alt={`${nameOf(one.kind)}: ${one.percentUsed}% used`}
+                width={METER_WIDTH}
+                height={METER_HEIGHT}
+              />
+              <Text size="caption" dimColor>
+                {captionOf(one, now)}
+              </Text>
+            </Box>
+          )
+        })}
+        {beneath}
       </Box>
     )
   })

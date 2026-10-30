@@ -38,9 +38,30 @@ const EFFORT_LABELS: Record<ModelRouterEffort, string> = {
   max: 'Max',
 }
 
-// The mockup's accents: clay for the main agent, blue for its subagents.
+const SHORT_EFFORTS: Record<ModelRouterEffort, string> = {
+  inherit: 'auto',
+  low: 'low',
+  medium: 'med',
+  high: 'high',
+  xhigh: 'xhigh',
+  max: 'max',
+}
+
+// The mockup's accents: clay for the main agent, blue for its subagents, each
+// with the tint of a selected tile and the edge of its card.
 const MAIN_COLOR = '#D97757'
+const MAIN_SELECTED = '#3a2a22'
+const MAIN_EDGE = '#5a3a2c'
 const SUB_COLOR = '#93B3DD'
+const SUB_SELECTED = '#232c38'
+const SUB_EDGE = '#34465c'
+const CARD = '#232321'
+const INSET = '#141413'
+const CHIP = '#1d1c1a'
+const TILE = '#2b2a27'
+const TRACK = '#3C3A36'
+const STOP_OFF = '#6f6b63'
+const THUMB = '#ECEAE3'
 
 const DEFAULTS: ModelRouterConfig = {
   mainModel: INHERIT,
@@ -60,6 +81,94 @@ const labelOf = (id: string) => {
 
   return [...MODELS, ...LEGACY].find(one => one.id === id)?.label ?? id
 }
+
+const capOf = (n: number) => `×${n === 0 ? '∞' : n}`
+
+const levelsOf = () => EFFORTS.map(level => SHORT_EFFORTS[level])
+
+const modelsOf = (one: ModelRouterConfig) =>
+  [...MODELS, ...(one.showLegacy ? LEGACY : [])].map(model => ({
+    id: model.id,
+    label: model.label,
+    hint: HINTS[model.id] ?? '',
+  }))
+
+// What each surface module is handed, by its `Client` key: the same function
+// draws the pane and answers a `ui.message`, so a post redraws it at once.
+const clientPropsOf = (key: string, one: ModelRouterConfig, overlay = false) => {
+  const tiles = (selected: string, accent: string, selectedBg: string) => ({
+    items: modelsOf(one),
+    selected,
+    accent,
+    selectedBg,
+    tile: TILE,
+    ink: THUMB,
+  })
+  const slider = (level: ModelRouterEffort, color: string) => ({
+    stops: levelsOf(),
+    index: EFFORTS.indexOf(level),
+    color,
+    track: TRACK,
+    ink: THUMB,
+  })
+  const toggle = (isOn: boolean, color: string) => ({
+    on: isOn,
+    color,
+    track: TRACK,
+    ink: THUMB,
+    overlay,
+  })
+
+  if (key === 'main-tiles') return tiles(one.mainModel, MAIN_COLOR, MAIN_SELECTED)
+  if (key === 'sub-tiles') return tiles(one.subModel, SUB_COLOR, SUB_SELECTED)
+  if (key === 'main-effort') return slider(one.mainEffort, MAIN_COLOR)
+  if (key === 'sub-effort') return slider(one.subEffort, SUB_COLOR)
+  if (key === 'sub-switch') return toggle(one.subEnabled, SUB_COLOR)
+  if (key === 'orch-switch') return toggle(one.orchestrator, MAIN_COLOR)
+
+  return undefined
+}
+
+// What each Svg last showed, by its `Client` key, so a redraw can animate from
+// there to the new value; a move stays drawn as an animation for a moment, so
+// a second redraw of the same change does not cut it short.
+
+const SHOWN = new Map<string, { from: number; to: number; at: number }>()
+const SETTLE_MS = 600
+
+const moveOf = (key: string, value: number) => {
+  const seen = SHOWN.get(key)
+
+  if (seen === undefined || seen.to === value) {
+    const held = seen ?? { from: value, to: value, at: 0 }
+
+    SHOWN.set(key, held)
+
+    return { from: held.from, to: held.to, isMoving: Date.now() - held.at < SETTLE_MS }
+  }
+
+  SHOWN.set(key, { from: seen.to, to: value, at: Date.now() })
+
+  return { from: seen.to, to: value, isMoving: true }
+}
+
+type Move = ReturnType<typeof moveOf>
+
+// A SMIL `animate` from the previous value to the new one, frozen there.
+const animate = (move: Move, attribute: string, from: string | number, to: string | number) =>
+  move.isMoving && from !== to
+    ? `<animate attributeName="${attribute}" from="${from}" to="${to}" dur="0.16s" begin="0s" fill="freeze"/>`
+    : ''
+
+// A 44 by 24 pill: a dark track and a thumb on the left, or the accent and the
+// thumb on the right; both ease over the move.
+const switchSource = (move: Move, color: string) => {
+  const fill = (isOn: number) => (isOn === 1 ? color : TRACK)
+  const at = (isOn: number) => (isOn === 1 ? 32 : 12)
+
+  return `<svg xmlns="http://www.w3.org/2000/svg" width="44" height="24" viewBox="0 0 44 24"><rect width="44" height="24" rx="12" fill="${fill(move.to)}">${animate(move, 'fill', fill(move.from), fill(move.to))}</rect><circle cx="${at(move.to)}" cy="12" r="10" fill="${THUMB}">${animate(move, 'cx', at(move.from), at(move.to))}</circle></svg>`
+}
+
 
 const summaryOf = (one: ModelRouterConfig) => {
   const main = `${labelOf(one.mainModel)}${one.mainEffort === INHERIT ? '' : ` · ${one.mainEffort}`}`
@@ -94,6 +203,35 @@ const save = async (
   await $.store.set(STORE_KEY, next)
 }
 
+const fieldOf = (data: unknown, name: string) =>
+  typeof data === 'object' && data !== null ? (data as Record<string, unknown>)[name] : undefined
+
+// What a surface module posted, as a change to the config; posted data is
+// input, so a model must be one listed and an effort one of the stops.
+const changeOf = (key: string, data: unknown) => {
+  const pick = fieldOf(data, 'pick')
+  const index = fieldOf(data, 'index')
+  const level = typeof index === 'number' ? EFFORTS[index] : undefined
+  const isModel = typeof pick === 'string' && [...MODELS, ...LEGACY].some(one => one.id === pick)
+  const isToggle = fieldOf(data, 'toggle') === true
+
+  const set = (patch: Partial<ModelRouterConfig>) => (c: ModelRouterConfig) => ({ ...c, ...patch })
+  if (key === 'main-tiles' && isModel) return set({ mainModel: pick })
+  if (key === 'sub-tiles' && isModel) return set({ subModel: pick })
+  if (key === 'main-effort' && level !== undefined) return set({ mainEffort: level })
+  if (key === 'sub-effort' && level !== undefined) return set({ subEffort: level })
+  if (key === 'sub-switch' && isToggle) return (c: ModelRouterConfig) => ({ ...c, subEnabled: !c.subEnabled })
+  if (key === 'orch-switch' && isToggle) return (c: ModelRouterConfig) => ({ ...c, orchestrator: !c.orchestrator })
+
+  return undefined
+}
+
+const apply = async ($: EngineInterface, key: string, data: unknown) => {
+  const change = changeOf(key, data)
+
+  if (change !== undefined) await save($, change)
+}
+
 // Claude Code has no modal: a pane opened with focus, Escape to close and the
 // toasts held is its dialog. The desktop app still seats it as a side panel.
 const openPicker = ($: EngineInterface) =>
@@ -111,6 +249,9 @@ export const register: Register = (on, options) => {
       name: 'models',
       description: 'Pick the model and effort for this agent and its subagents',
     })
+
+    // 0.4.0's slider diagnostic wrote the status line; clear what it left.
+    $.ui.status(undefined)
 
     const stored = (await $.store.get(STORE_KEY)) as Partial<ModelRouterConfig> | undefined
 
@@ -219,29 +360,77 @@ export const register: Register = (on, options) => {
     })
   }).catch(($, e, next) => next(e))
 
-  // The band above the prompt: what is in force, and the button that opens
-  // the picker.
+  // What a `Client` of the picker posts: a pick, a stop, a toggle. The answer
+  // hands that instance its new props at once; the pane is drawn again so the
+  // Svg beside it shows the change.
+  on('ui.message', async ($, e) => {
+    await apply($, e.element, e.data)
+    $.ui.invalidate('ui.render')
+
+    const props = clientPropsOf(e.element, await read($, config), e.surface === 'desktop')
+
+    return props === undefined ? {} : { props }
+  })
+
+  // The band above the prompt: what is in force, in one chip, and the button
+  // that opens the picker. The terminal draws the same on a single row.
   on('ui.render', { component: 'AbovePrompt' }, async ($, e, next) => {
     if (e.props.hasSurvey) return next(e)
 
     const beneath = await next(e)
     const one = await read($, config)
     const { Box, Button, Text } = $.ui.resolve(e)
+    const chip =
+      e.surface === 'terminal'
+        ? {}
+        : {
+            backgroundColor: CHIP,
+            borderStyle: 'round',
+            borderColor: TILE,
+            paddingX: 'sm' as const,
+          }
+
+    const row = (
+      <Box columnGap="sm" alignItems="center" {...chip}>
+        <Text color={MAIN_COLOR}>●</Text>
+        <Text weight="semibold">{labelOf(one.mainModel)}</Text>
+        {one.mainEffort !== INHERIT && <Text dimColor>{SHORT_EFFORTS[one.mainEffort]}</Text>}
+        {one.subEnabled && <Text dimColor>→</Text>}
+        {one.subEnabled && <Text color={SUB_COLOR}>●</Text>}
+        {one.subEnabled && <Text weight="semibold">{labelOf(one.subModel)}</Text>}
+        {one.subEnabled && (
+          <Text dimColor>
+            {one.subEffort === INHERIT ? '' : `${SHORT_EFFORTS[one.subEffort]} `}
+            {capOf(one.maxSubagents)}
+          </Text>
+        )}
+        {one.orchestrator && (
+          <Text size="caption" weight="semibold" color={MAIN_COLOR} backgroundColor={MAIN_SELECTED}>
+            {' ORQ '}
+          </Text>
+        )}
+        <Button key="open-models" label="Models" onPress={() => openPicker($)} />
+      </Box>
+    )
+
+    if (beneath === null || beneath === undefined) return row
+
+    // The other mods' bars first, the chip at the far end of the same row; they
+    // wrap onto a second line only when the row is full.
+    if (e.surface === 'terminal') {
+      return (
+        <Box flexDirection="column" rowGap="sm">
+          {beneath}
+          {row}
+        </Box>
+      )
+    }
 
     return (
-      <Box flexDirection="column" rowGap="sm">
+      <Box flexWrap="wrap" columnGap="md" rowGap="sm" alignItems="center">
         {beneath}
-        <Box columnGap="sm" alignItems="center">
-          <Text color={MAIN_COLOR}>●</Text>
-          <Text weight="semibold">{labelOf(one.mainModel)}</Text>
-          {one.mainEffort !== INHERIT && <Text dimColor>{one.mainEffort}</Text>}
-          {one.subEnabled && <Text dimColor>›</Text>}
-          {one.subEnabled && <Text color={SUB_COLOR}>●</Text>}
-          {one.subEnabled && <Text weight="semibold">{labelOf(one.subModel)}</Text>}
-          {one.subEnabled && one.subEffort !== INHERIT && <Text dimColor>{one.subEffort}</Text>}
-          {one.orchestrator && <Text dimColor>· orchestrator</Text>}
-          <Button key="open-models" label="Models" onPress={() => openPicker($)} />
-        </Box>
+        <Box flexGrow={1} />
+        {row}
       </Box>
     )
   })
@@ -250,128 +439,176 @@ export const register: Register = (on, options) => {
   on('ui.render', { component: 'Pane', requestId: PANE }, async ($, e) => {
     const one = await read($, config)
     const { Box, Button, Text } = $.ui.resolve(e)
+    // The tiles, sliders and switches are surface modules; vscode and mobile
+    // have no `Client`, and draw buttons instead. The desktop draws a switch
+    // and a slider as an `Svg` with a `Client` laid over it for the pointer;
+    // the terminal's `Client` draws them itself.
+    const Client =
+      e.surface === 'vscode' || e.surface === 'mobile' ? undefined : $.ui.resolve(e).Client
+    const Svg = e.surface === 'desktop' ? $.ui.resolve(e).Svg : undefined
 
-    const caption = (text: string) => (
-      <Text size="caption" weight="semibold" dimColor>
+    const caption = (text: string, color?: string) => (
+      <Text size="caption" weight="semibold" color={color} dimColor={color === undefined}>
         {text}
       </Text>
     )
 
-    const switchOf = (key: string, isOn: boolean, flip: () => void) => (
-      <Button
-        key={key}
-        label={isOn ? 'On' : 'Off'}
-        variant={isOn ? 'primary' : 'secondary'}
-        onPress={flip}
-      />
+    const dot = (color: string) => <Text color={color}>●</Text>
+
+    // A plain Button holding one Text: Buttons take no color, their Text does.
+    const choice = (
+      key: string,
+      text: string,
+      isSelected: boolean,
+      pick: () => void,
+      options: { color?: string; size?: 'caption'; autoFocus?: true } = {},
+    ) => (
+      <Button key={key} plain autoFocus={options.autoFocus} onPress={pick}>
+        <Text
+          size={options.size}
+          weight={isSelected ? 'semibold' : 'regular'}
+          color={isSelected ? options.color : undefined}
+          dimColor={!isSelected}
+        >
+          {text}
+        </Text>
+      </Button>
     )
 
-    const modelButtons = (
-      prefix: string,
-      selected: string,
-      pick: (id: string) => void,
-      hasHints: boolean,
-    ) =>
-      [...MODELS, ...(one.showLegacy ? LEGACY : [])].map(model => (
-        <Button
-          key={`${prefix}-${model.id}`}
-          label={model.label}
-          variant={selected === model.id ? 'primary' : 'secondary'}
-          onPress={() => pick(model.id)}
-        >
-          {model.label}
-          {hasHints && HINTS[model.id] !== undefined && (
-            <Text size="caption" dimColor>
-              {' '}
-              {HINTS[model.id]}
-            </Text>
+    // Each `module` is a string literal: the engine reads it off the source.
+    const modelTiles = (key: string, selected: string, color: string) =>
+      Client !== undefined ? (
+        <Client key={key} module="./tiles.tsx" props={clientPropsOf(key, one)} width="100%" />
+      ) : (
+        <Box columnGap="sm" rowGap="xs" flexWrap="wrap">
+          {modelsOf(one).map(model =>
+            choice(
+              `${key}-${model.id}`,
+              model.label,
+              model.id === selected,
+              () => apply($, key, { pick: model.id }),
+              { color },
+            ),
           )}
-        </Button>
-      ))
+        </Box>
+      )
 
-    const effortButtons = (
-      prefix: string,
-      selected: ModelRouterEffort,
-      pick: (level: ModelRouterEffort) => void,
-    ) =>
-      EFFORTS.map(level => (
+    const switchOf = (key: string, isOn: boolean, color: string) =>
+      Client !== undefined && Svg !== undefined ? (
+        <Box position="relative">
+          <Svg
+            source={switchSource(moveOf(key, isOn ? 1 : 0), color)}
+            alt={isOn ? 'On' : 'Off'}
+            width={44}
+            height={24}
+            isInteractive
+          />
+          <Box position="absolute" top={0} left={0} width="100%" height="100%">
+            <Client
+              key={key}
+              module="./switch.tsx"
+              props={clientPropsOf(key, one, true)}
+              width="100%"
+              height="100%"
+            />
+          </Box>
+        </Box>
+      ) : Client !== undefined ? (
+        <Client key={key} module="./switch.tsx" props={clientPropsOf(key, one)} width={9} height={3} />
+      ) : (
         <Button
-          key={`${prefix}-${level}`}
-          label={EFFORT_LABELS[level]}
-          variant={selected === level ? 'primary' : 'secondary'}
-          onPress={() => pick(level)}
+          key={key}
+          label={isOn ? 'On' : 'Off'}
+          variant={isOn ? 'primary' : 'secondary'}
+          onPress={() => apply($, key, { toggle: true })}
         />
-      ))
+      )
+
+    // The slider is the surface module's alone, at rest and while dragged: the
+    // desktop holds the pane's redraws during a press, so an Svg drawn here
+    // could not follow the drag, and two drawings would not match.
+    const effortSlider = (key: string, selected: ModelRouterEffort, color: string) => (
+      <Box flexDirection="column" rowGap="xs">
+        <Box justifyContent="space-between" alignItems="center">
+          {caption('EFFORT')}
+          <Text weight="semibold">{EFFORT_LABELS[selected]}</Text>
+        </Box>
+        {Client !== undefined ? (
+          <Client key={key} module="./slider.tsx" props={clientPropsOf(key, one)} width="100%" />
+        ) : (
+          <Box justifyContent="space-between">
+            {EFFORTS.map((level, index) =>
+              choice(
+                `${key}-${level}`,
+                SHORT_EFFORTS[level],
+                level === selected,
+                () => apply($, key, { index }),
+                { color, size: 'caption' },
+              ),
+            )}
+          </Box>
+        )}
+      </Box>
+    )
 
     return (
       <Box flexDirection="column" rowGap="md" padding="sm">
-        <Box flexDirection="column" rowGap="sm">
-          {caption('MAIN AGENT')}
-          <Box columnGap="sm" rowGap="sm" flexWrap="wrap">
-            <Button
-              key="main-inherit"
-              label="Default"
-              autoFocus
-              variant={one.mainModel === INHERIT ? 'primary' : 'secondary'}
-              onPress={() => save($, c => ({ ...c, mainModel: INHERIT }))}
-            />
-            {modelButtons('main', one.mainModel, id => save($, c => ({ ...c, mainModel: id })), true)}
-          </Box>
-          {caption('REASONING EFFORT')}
-          <Box columnGap="sm" rowGap="sm" flexWrap="wrap">
-            {effortButtons('me', one.mainEffort, level =>
-              save($, c => ({ ...c, mainEffort: level })),
+        <Box
+          flexDirection="column"
+          rowGap="sm"
+          padding="sm"
+          borderStyle="round"
+          borderColor={MAIN_EDGE}
+          backgroundColor={CARD}
+        >
+          <Box justifyContent="space-between" alignItems="center">
+            <Box columnGap="sm" alignItems="center">
+              {dot(MAIN_COLOR)}
+              {caption('MAIN AGENT', MAIN_COLOR)}
+            </Box>
+            {choice(
+              'main-inherit',
+              'Session default',
+              one.mainModel === INHERIT,
+              () => save($, c => ({ ...c, mainModel: INHERIT })),
+              { color: MAIN_COLOR, size: 'caption', autoFocus: true },
             )}
           </Box>
+          {modelTiles('main-tiles', one.mainModel, MAIN_COLOR)}
+          {effortSlider('main-effort', one.mainEffort, MAIN_COLOR)}
         </Box>
 
-        <Box flexDirection="column" rowGap="sm">
-          {caption('SUBAGENTS')}
-          <Box justifyContent="space-between" alignItems="center" columnGap="md">
-            <Box flexDirection="column">
-              <Text weight="medium">Different model for subagents</Text>
-              <Text size="caption" dimColor>
-                {one.subEnabled
-                  ? 'Agents spawned by the main agent use this instead'
-                  : `Subagents inherit ${labelOf(one.mainModel)}`}
-              </Text>
+        <Box
+          flexDirection="column"
+          rowGap="sm"
+          padding="sm"
+          borderStyle="round"
+          borderColor={SUB_EDGE}
+          backgroundColor={CARD}
+        >
+          <Box justifyContent="space-between" alignItems="center">
+            <Box columnGap="sm" alignItems="center">
+              {dot(SUB_COLOR)}
+              {caption('SUBAGENTS', SUB_COLOR)}
             </Box>
-            {switchOf('sub-toggle', one.subEnabled, () =>
-              save($, c => ({ ...c, subEnabled: !c.subEnabled })),
-            )}
+            {switchOf('sub-switch', one.subEnabled, SUB_COLOR)}
           </Box>
-          {one.subEnabled && (
-            <Box
-              flexDirection="column"
-              rowGap="sm"
-              padding="sm"
-              borderStyle="round"
-              borderColor={SUB_COLOR}
-            >
-              <Box columnGap="sm" rowGap="sm" flexWrap="wrap">
-                {modelButtons('sub', one.subModel, id => save($, c => ({ ...c, subModel: id })), false)}
-              </Box>
-              <Box columnGap="sm" rowGap="sm" flexWrap="wrap" alignItems="center">
-                <Text size="caption" dimColor>
-                  Effort
-                </Text>
-                {effortButtons('se', one.subEffort, level =>
-                  save($, c => ({ ...c, subEffort: level })),
-                )}
-              </Box>
+          {one.subEnabled ? (
+            <Box flexDirection="column" rowGap="sm">
+              {modelTiles('sub-tiles', one.subModel, SUB_COLOR)}
+              {effortSlider('sub-effort', one.subEffort, SUB_COLOR)}
             </Box>
+          ) : (
+            <Text size="caption" dimColor>
+              {`Subagents inherit ${labelOf(one.mainModel)}`}
+            </Text>
           )}
-
-          <Box justifyContent="space-between" alignItems="center" columnGap="md">
-            <Box flexDirection="column">
-              <Text weight="medium">Max concurrent subagents</Text>
-              <Text size="caption" dimColor>
-                Spawns past the cap are refused
-              </Text>
-            </Box>
-            <Box columnGap="xs" alignItems="center">
+          <Box justifyContent="space-between" alignItems="center">
+            <Text>Concurrent</Text>
+            <Box columnGap="sm" alignItems="center" paddingX="sm" backgroundColor={INSET}>
               <Button
                 key="cap-down"
+                plain
                 label="−"
                 onPress={() =>
                   save($, c => ({ ...c, maxSubagents: Math.max(0, c.maxSubagents - 1) }))
@@ -382,25 +619,24 @@ export const register: Register = (on, options) => {
               </Text>
               <Button
                 key="cap-up"
-                label="+"
+                plain
+                label="＋"
                 onPress={() =>
                   save($, c => ({ ...c, maxSubagents: Math.min(20, c.maxSubagents + 1) }))
                 }
               />
             </Box>
           </Box>
+        </Box>
 
-          <Box justifyContent="space-between" alignItems="center" columnGap="md">
-            <Box flexDirection="column">
-              <Text weight="medium">Orchestrator mode</Text>
-              <Text size="caption" dimColor>
-                Main agent plans, delegates and reviews — it does not do the heavy work
-              </Text>
-            </Box>
-            {switchOf('orchestrator', one.orchestrator, () =>
-              save($, c => ({ ...c, orchestrator: !c.orchestrator })),
-            )}
+        <Box justifyContent="space-between" alignItems="center" paddingX="sm">
+          <Box flexDirection="column">
+            <Text>Orchestrator</Text>
+            <Text size="caption" dimColor>
+              Plans, delegates and reviews
+            </Text>
           </Box>
+          {switchOf('orch-switch', one.orchestrator, MAIN_COLOR)}
         </Box>
 
         <Box justifyContent="space-between" alignItems="center">

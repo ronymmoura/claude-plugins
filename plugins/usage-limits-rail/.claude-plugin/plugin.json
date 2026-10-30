@@ -1,6 +1,6 @@
 {
   "name": "usage-limits-rail",
-  "version": "0.2.0",
+  "version": "0.3.0",
   "description": "The account's rate-limit windows in a compact line above the prompt: how much of each is used and when it resets.",
   "author": { "name": "Rony Moura" },
   "types": "./types/index.d.ts",
@@ -8,8 +8,14 @@
     "warnPercent": {
       "type": "number",
       "title": "Warn from",
-      "description": "Percentage from which a window is drawn as a warning.",
-      "default": 85
+      "description": "Percentage above which a window is drawn in amber.",
+      "default": 75
+    },
+    "dangerPercent": {
+      "type": "number",
+      "title": "Danger from",
+      "description": "Percentage above which a window is drawn in red.",
+      "default": 90
     }
   }
 }
